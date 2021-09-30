@@ -87,6 +87,14 @@ func newReadyContainer(defs *config.Defaults, test *grpcv1.LoadTest) corev1.Cont
 				Name:  "READY_TIMEOUT",
 				Value: fmt.Sprintf("%d%s", test.Spec.TimeoutSeconds, "s"),
 			},
+			{
+				Name:  "METADATA_OUTPUT_FILE",
+				Value: config.ReadyMetadataOutputFile,
+			},
+			{
+				Name:  "NODE_INFO_OUTPUT_FILE",
+				Value: config.ReadyNodeInfoOutputFile,
+			},
 		},
 		VolumeMounts: []corev1.VolumeMount{
 			{
@@ -193,10 +201,18 @@ func (pb *PodBuilder) PodForDriver(driver *grpcv1.Driver) (*corev1.Pod, error) {
 		MountPath: config.ScenariosMountPath,
 		ReadOnly:  true,
 	})
-	runContainer.Env = append(runContainer.Env, corev1.EnvVar{
-		Name:  config.ScenariosFileEnv,
-		Value: config.ScenariosMountPath + "/scenarios.json",
-	})
+	runContainer.Env = append(runContainer.Env,
+		corev1.EnvVar{
+			Name:  config.ScenariosFileEnv,
+			Value: config.ScenariosMountPath + "/scenarios.json"},
+		corev1.EnvVar{
+			Name:  "METADATA_OUTPUT_FILE",
+			Value: config.ReadyMetadataOutputFile,
+		},
+		corev1.EnvVar{
+			Name:  "NODE_INFO_OUTPUT_FILE",
+			Value: config.ReadyNodeInfoOutputFile,
+		})
 
 	if results := pb.test.Spec.Results; results != nil {
 		if bigQueryTable := results.BigQueryTable; bigQueryTable != nil {

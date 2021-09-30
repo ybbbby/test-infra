@@ -21,6 +21,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"path"
 	"time"
 
 	"github.com/grpc/test-infra/tools/runner"
@@ -30,7 +31,6 @@ import (
 func main() {
 	var i runner.FileNames
 	var o string
-	var xunitSuitesName string
 	var c runner.ConcurrencyLevels
 	var a string
 	var p time.Duration
@@ -38,7 +38,6 @@ func main() {
 
 	flag.Var(&i, "i", "input files containing load test configurations")
 	flag.StringVar(&o, "o", "", "name of the output file for xunit xml report")
-	flag.StringVar(&xunitSuitesName, "xunit-suites-name", "", "name field for testsuites in xunit xml report")
 	flag.Var(&c, "c", "concurrency level, in the form [<queue name>:]<concurrency level>")
 	flag.StringVar(&a, "annotation-key", "pool", "annotation key to parse for queue assignment")
 	flag.DurationVar(&p, "polling-interval", 20*time.Second, "polling interval for load test status")
@@ -66,14 +65,9 @@ func main() {
 
 	logPrefixFmt := runner.LogPrefixFmt(configQueueMap)
 
-	var report *xunit.Report
-	if o != "" {
-		report = &xunit.Report{
-			Name: xunitSuitesName,
-		}
-	}
+	report := xunit.Report{}
 
-	reporter := runner.NewReporter(report)
+	reporter := runner.NewReporter(&report)
 	reporter.SetStartTime(time.Now())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,7 +76,7 @@ func main() {
 	done := make(chan *runner.TestSuiteReporter)
 
 	for qName, configs := range configQueueMap {
-		testSuiteReporter := reporter.NewTestSuiteReporter(qName, logPrefixFmt)
+		testSuiteReporter := reporter.NewTestSuiteReporter(qName, logPrefixFmt, runner.TestCaseNameFromAnnotations("scenario"))
 		testSuiteReporter.SetStartTime(time.Now())
 		go r.Run(ctx, configs, testSuiteReporter, c[qName], done)
 	}
@@ -95,20 +89,41 @@ func main() {
 
 	reporter.SetEndTime(time.Now())
 
-	if report != nil {
-		report.Finalize()
+	report.Finalize()
 
-		outputFile, err := os.Create(o)
-		if err != nil {
-			log.Fatalf("Failed to create output file %q: %v", o, err)
-		}
+	if o != "" {
+		outputPath := xunit.OutputPath(o)
 
-		err = report.WriteToStream(outputFile, xunit.ReportWritingOptions{
-			IndentSize: 2,
-			MaxRetries: 3,
-		})
-		if err != nil {
-			log.Fatalf("Failed to write XML report to output file %q: %v", o, err)
+		for suiteName, suiteReport := range report.Split() {
+			outputFilePath := outputPath(suiteName)
+
+			outputDir := path.Dir(outputFilePath)
+			if err := os.MkdirAll(outputDir, os.ModePerm); err != nil {
+				log.Fatalf("Failed to create output directory %q: %v", outputDir, err)
+			}
+
+			outputFile, err := os.Create(outputFilePath)
+			if err != nil {
+				log.Fatalf("Failed to create output file %q: %v", outputFilePath, err)
+			}
+
+			err = suiteReport.WriteToStream(outputFile, xunit.ReportWritingOptions{
+				IndentSize: 2,
+				MaxRetries: 3,
+			})
+			if err != nil {
+				log.Fatalf("Failed to write XML report to file %q: %v", outputFilePath, err)
+			}
+
+			if err := outputFile.Close(); err != nil {
+				log.Fatalf("Failed to close output file %q: %v", outputFilePath, err)
+			}
+
+			log.Printf("Wrote XML report to file %q", outputFilePath)
 		}
+	}
+
+	if report.ErrorCount > 0 {
+		log.Fatalf("Errors found during test run: %d", report.ErrorCount)
 	}
 }
